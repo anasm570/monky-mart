@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>🐒 Monkey Mart - متعدد اللاعبين (هاتف + حاسوب)</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+        body {
+            background: linear-gradient(145deg, #1a472a, #0e2a1a);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 10px;
+        }
+        .game-container {
+            background: #2c3e2fdd;
+            border-radius: 32px;
+            padding: 15px;
+            backdrop-filter: blur(8px);
+            box-shadow: 0 20px 35px rgba(0,0,0,0.4);
+        }
+        canvas {
+            background: #5d8c48;
+            border-radius: 24px;
+            box-shadow: 0 8px 20px black;
+            cursor: crosshair;
+            display: block;
+            margin: 0 auto;
+            width: 100%;
+            height: auto;
+            touch-action: none;
+        }
+        .info-panel {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #1e2a1ecc;
+            padding: 8px 16px;
+            border-radius: 60px;
+            margin-bottom: 15px;
+            color: #ffefb9;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .money { background: #00000066; padding: 4px 12px; border-radius: 40px; font-size: 1.1rem; }
+        .controls { background: #00000066; padding: 4px 12px; border-radius: 40px; font-size: 0.7rem; }
+        button {
+            background: #e67e22;
+            border: none;
+            padding: 5px 12px;
+            border-radius: 40px;
+            color: white;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 0.8rem;
+        }
+        .touch-panel {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-top: 15px;
+            background: #1e2a1eaa;
+            padding: 10px;
+            border-radius: 80px;
+            backdrop-filter: blur(5px);
+        }
+        .touch-btn {
+            background: #333;
+            width: 55px;
+            height: 55px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            font-weight: bold;
+            color: white;
+            box-shadow: 0 4px 0 #111;
+            cursor: pointer;
+            transition: 0.05s linear;
+            user-select: none;
+        }
+        .touch-btn:active { transform: translateY(3px); box-shadow: 0 1px 0 #111; }
+        .login-panel {
+            background: #1e2a1ecc;
+            padding: 25px;
+            border-radius: 60px;
+            text-align: center;
+            max-width: 350px;
+            margin: auto;
+        }
+        .login-panel input {
+            display: block;
+            width: 100%;
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 40px;
+            border: none;
+            text-align: center;
+        }
+        @media (max-width: 700px) {
+            .touch-btn { width: 45px; height: 45px; font-size: 24px; }
+            .info-panel { font-size: 12px; }
+        }
+    </style>
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+<div id="loginDiv" class="login-panel">
+    <h1>🐒 Monkey Mart</h1>
+    <p>تسجيل الدخول أو إنشاء حساب</p>
+    <input type="text" id="loginUsername" placeholder="اسم المستخدم">
+    <input type="password" id="loginPassword" placeholder="كلمة المرور">
+    <button id="loginBtn">دخول</button>
+    <div id="loginError" style="color:#ffaaaa; margin-top:10px;"></div>
+</div>
+
+<div id="gameDiv" style="display:none;">
+    <div class="game-container">
+        <div class="info-panel">
+            <div class="money">💰 <span id="moneyAmount">0</span></div>
+            <div class="controls">🖱️ اضغط على المحصول لجنيه | شراء مراحل تفتح محاصيل أقوى</div>
+            <button id="shopBtn">🌾 شراء مرحلة جديدة</button>
+        </div>
+        <canvas id="gameCanvas" width="800" height="500" style="width:100%; height:auto; max-width:800px; aspect-ratio:800/500"></canvas>
+        <div class="touch-panel">
+            <div class="touch-btn" data-dir="w">🔼</div>
+            <div class="touch-btn" data-dir="a">◀️</div>
+            <div class="touch-btn" data-dir="s">🔽</div>
+            <div class="touch-btn" data-dir="d">▶️</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const socket = io();
+    let ctx, canvas, playerId = null;
+    let players = new Map();
+    let gameMoney = 0, unlockedCrops = [];
+    let cropsData = [];
+    let localPlayer = { x: 400, y: 250, name: '', color: '#FFD966', id: null };
+    let keys = { w: false, s: false, a: false, d: false };
+    let moveInterval = null, animationId = null;
+
+    const loginDiv = document.getElementById('loginDiv');
+    const gameDiv = document.getElementById('gameDiv');
+    const loginBtn = document.getElementById('loginBtn');
+    const loginUsername = document.getElementById('loginUsername');
+    const loginPassword = document.getElementById('loginPassword');
+    const loginError = document.getElementById('loginError');
+    const moneySpan = document.getElementById('moneyAmount');
+    const shopBtn = document.getElementById('shopBtn');
+
+    function attachTouchControls() {
+        const btns = document.querySelectorAll('.touch-btn');
+        btns.forEach(btn => {
+            const dir = btn.getAttribute('data-dir');
+            btn.addEventListener('touchstart', (e) => { e.preventDefault(); keys[dir] = true; });
+            btn.addEventListener('touchend', (e) => { e.preventDefault(); keys[dir] = false; });
+            btn.addEventListener('mousedown', () => keys[dir] = true);
+            btn.addEventListener('mouseup', () => keys[dir] = false);
+            btn.addEventListener('mouseleave', () => keys[dir] = false);
+        });
+    }
+
+    function updateUI() {
+        moneySpan.innerText = gameMoney;
+    }
+
+    function drawGame() {
+        if (!ctx) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#5d8c48';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        cropsData.forEach(crop => {
+            if (unlockedCrops.includes(crop.id)) {
+                ctx.fillStyle = '#F4D03F';
+                ctx.beginPath();
+                ctx.arc(crop.pos.x, crop.pos.y, 25, 0, Math.PI*2);
+                ctx.fill();
+                ctx.fillStyle = '#2C3E50';
+                ctx.font = '18px Arial';
+                ctx.fillText(crop.name, crop.pos.x - 20, crop.pos.y - 15);
+                ctx.font = '14px Arial';
+                ctx.fillStyle = 'white';
+                ctx.fillText(`💰 ${crop.baseValue}`, crop.pos.x - 20, crop.pos.y + 10);
+            }
+        });
+        for (let [id, p] of players.entries()) {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 18, 0, Math.PI*2);
+            ctx.fillStyle = p.color;
+            ctx.fill();
+            ctx.fillStyle = '#000';
+            ctx.font = 'bold 12px Arial';
+            ctx.fillText(p.name, p.x - 20, p.y - 20);
+        }
+        ctx.beginPath();
+        ctx.arc(localPlayer.x, localPlayer.y, 20, 0, Math.PI*2);
+        ctx.fillStyle = localPlayer.color;
+        ctx.fill();
+        ctx.fillStyle = '#FFF';
+        ctx.font = 'bold 14px Arial';
+        ctx.fillText(localPlayer.name, localPlayer.x - 25, localPlayer.y - 25);
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    }
+
+    function updateMovement() {
+        let dx = 0, dy = 0;
+        if (keys.w) dy -= 4;
+        if (keys.s) dy += 4;
+        if (keys.a) dx -= 4;
+        if (keys.d) dx += 4;
+        if (dx !== 0 || dy !== 0) {
+            localPlayer.x = Math.min(Math.max(localPlayer.x + dx, 30), canvas.width - 30);
+            localPlayer.y = Math.min(Math.max(localPlayer.y + dy, 30), canvas.height - 30);
+            socket.emit('player_move', { x: localPlayer.x, y: localPlayer.y });
+        }
+    }
+
+    function handleCanvasClick(e) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        let clientX, clientY;
+        if (e.touches) {
+            clientX = e.touches[0].clientX;
+            clientY = e.touches[0].clientY;
+            e.preventDefault();
+        } else {
+            clientX = e.clientX;
+            clientY = e.clientY;
+        }
+        const mouseX = (clientX - rect.left) * scaleX;
+        const mouseY = (clientY - rect.top) * scaleY;
+        for (let crop of cropsData) {
+            if (unlockedCrops.includes(crop.id)) {
+                const dx = mouseX - crop.pos.x;
+                const dy = mouseY - crop.pos.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                if (dist < 28) {
+                    socket.emit('collect_crop', { cropId: crop.id, value: crop.baseValue });
+                    break;
+                }
+            }
+        }
+    }
+
+    socket.on('login_success', (data) => {
+        loginDiv.style.display = 'none';
+        gameDiv.style.display = 'block';
+        gameMoney = data.gameData.money;
+        unlockedCrops = data.gameData.unlockedCrops;
+        cropsData = data.gameData.crops;
+        localPlayer.name = data.username;
+        localPlayer.color = data.player.color;
+        localPlayer.id = data.player.id;
+        localPlayer.x = data.player.x;
+        localPlayer.y = data.player.y;
+        updateUI();
+        canvas = document.getElementById('gameCanvas');
+        ctx = canvas.getContext('2d');
+        canvas.addEventListener('click', handleCanvasClick);
+        canvas.addEventListener('touchstart', (e) => { e.preventDefault(); handleCanvasClick(e); });
+        attachTouchControls();
+        if (moveInterval) clearInterval(moveInterval);
+        moveInterval = setInterval(() => updateMovement(), 40);
+        function animate() { drawGame(); requestAnimationFrame(animate); }
+        animate();
+    });
+
+    socket.on('login_failed', (data) => { loginError.innerText = data.message; });
+    socket.on('game_state', (state) => {
+        gameMoney = state.money;
+        unlockedCrops = state.unlockedCrops;
+        cropsData = state.crops;
+        updateUI();
+    });
+    socket.on('player_joined', (player) => { players.set(player.id, player); });
+    socket.on('player_moved', (data) => { if (players.has(data.id)) { players.get(data.id).x = data.x; players.get(data.id).y = data.y; } });
+    socket.on('player_left', (id) => players.delete(id));
+    socket.on('buy_success', () => { alert(`✅ تم فتح محصول جديد!`); });
+    socket.on('buy_failed', (data) => alert(data.message));
+
+    loginBtn.onclick = () => {
+        const username = loginUsername.value.trim();
+        const password = loginPassword.value.trim();
+        if (!username || !password) { loginError.innerText = 'املأ الحقول'; return; }
+        socket.emit('login', { username, password });
+    };
+
+    shopBtn.onclick = () => {
+        const nextCrop = cropsData.find(c => !unlockedCrops.includes(c.id));
+        if (nextCrop) {
+            socket.emit('buy_crop', { cropId: nextCrop.id, cost: nextCrop.unlockCost });
+        } else {
+            alert('جميع المحاصيل مفتوحة بالفعل!');
+        }
+    };
+</script>
+</body>
+</html>
